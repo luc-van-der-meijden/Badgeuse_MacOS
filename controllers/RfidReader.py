@@ -2,6 +2,7 @@ import threading
 from controllers.ApiPlateforme import ApiPlateforme
 from smartcard.System import readers
 from smartcard.util import toHexString
+import time
 # from controllers.App import App
 
 class RfidReader:
@@ -14,47 +15,71 @@ class RfidReader:
         thread.daemon = True
         thread.start()
 
-
     def read_rfid(self, part2_frame, canvas, part3_frame, data_badges, appInstance, callback):
-        print("Lecture en cours")
+        print("En attente d'une carte...")
+
+        reader_list = readers()
+        if not reader_list:
+            print("Aucun lecteur détecté.")
+            return
+        
+        reader = reader_list[0]
+        connection = reader.createConnection()
+
         while True:
-
-            # print("READ RFID")
-            card_id = 0
-
-            # Recherche des lecteurs de cartes
-            card_readers = readers()
-
-            if len(card_readers) == 0:
-                return
-
-            reader = card_readers[0]
-
             try:
-                connection = reader.createConnection()
-                connection.connect()
+                # Vérifier si une carte est insérée en tentant de se connecter
+                try:
+                    connection.connect()
+                except Exception as e:
+                    if "No smart card inserted" in str(e):
+                        print("Aucune carte détectée, attente...")
+                        time.sleep(0.5)
+                        continue  # Retour au début de la boucle
+                    else:
+                        raise  # Si ce n'est pas une erreur de carte absente, on affiche l'erreur
 
-                # Lire le numéro de série de la carte RFID
+                print("Carte détectée ! Lecture en cours...")
+
+                # Lire le numéro de série de la carte
                 READ_SERIAL = [0xFF, 0xCA, 0x00, 0x00, 0x00]
-                response, sw1, sw2 = connection.transmit(READ_SERIAL)
+                try:
+                    response, sw1, sw2 = connection.transmit(READ_SERIAL)
+                except Exception as e:
+                    print(f"Erreur lors de la transmission : {e}")
+                    time.sleep(1)
+                    continue  # Recommencer la boucle proprement
+
+                # Vérification du statut SW1 SW2
                 if sw1 == 0x90 and sw2 == 0x00:
-                    
-                    response_reversed = response[::-1]
-                    
-                    card_id = int(toHexString(
-                        response_reversed).replace(" ", ""), 16)
-                    print(card_id);
+                    card_id = int(toHexString(response[::-1]).replace(" ", ""), 16)
+                    print(f"ID de la carte : {card_id}")
+
                     student_email = ApiPlateforme.get_student_by_badge(data_badges, card_id)
-                    # print("Email student " + student_email)
+
                     if student_email:
                         callback(student_email, True)
-                        print(student_email) ; # -1, 
-                    else: 
-                        print("L'email étudiant est vide")  
-            except Exception as e:
-                pass
+                        print(f"Email étudiant : {student_email}")
+                    else:
+                        print("L'email étudiant est vide.")
+                else:
+                    print(f"Erreur lors de la lecture : statut SW1={sw1}, SW2={sw2}")
 
-            finally:
                 connection.disconnect()
+                time.sleep(0.5)  # Petite pause pour éviter les erreurs
+
+                # Attendre que la carte soit retirée avant de continuer
+                while True:
+                    try:
+                        connection.connect()
+                        time.sleep(0.5)  # Pause avant de revérifier
+                    except:
+                        print("Carte retirée, en attente d'une nouvelle carte...")
+                        break  # Sortie de la boucle pour attendre une nouvelle carte
+
+            except Exception as e:
+                print(f"Erreur lors de la lecture : {e}")
+                time.sleep(0.5)  # Attendre avant de réessayer
+
 
     # root.after(10000, read_rfid, root)
